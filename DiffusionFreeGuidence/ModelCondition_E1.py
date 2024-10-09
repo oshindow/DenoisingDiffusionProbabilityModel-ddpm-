@@ -69,7 +69,18 @@ class DownSample(nn.Module):
         self.c1 = nn.Conv2d(in_ch, in_ch, 3, stride=2, padding=1)
         self.c2 = nn.Conv2d(in_ch, in_ch, 5, stride=2, padding=2)
 
-    def forward(self, x, temb, cemb):
+    def forward(self, x, temb=None, cemb=None):
+        x = self.c1(x) + self.c2(x)
+        return x
+
+
+class DownSample1d(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.c1 = nn.Conv2d(in_ch, in_ch, 3, stride=(2, 1), padding=1)
+        self.c2 = nn.Conv2d(in_ch, in_ch, 5, stride=(2, 1), padding=2)
+
+    def forward(self, x, temb=None, cemb=None):
         x = self.c1(x) + self.c2(x)
         return x
 
@@ -80,8 +91,21 @@ class UpSample(nn.Module):
         self.c = nn.Conv2d(in_ch, in_ch, 3, stride=1, padding=1)
         self.t = nn.ConvTranspose2d(in_ch, in_ch, 5, 2, 2, 1)
 
-    def forward(self, x, temb, cemb):
+    def forward(self, x, temb=None, cemb=None):
         _, _, H, W = x.shape
+        x = self.t(x)
+        x = self.c(x)
+        return x
+    
+
+class UpSample1d(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.c = nn.Conv2d(in_ch, in_ch, 3, stride=1, padding=1)
+        self.t = nn.ConvTranspose2d(in_ch, in_ch, 5, (2, 1), (2,2), (1,0))
+
+    def forward(self, x, temb=None, cemb=None):
+        x = x.unsqueeze(1)
         x = self.t(x)
         x = self.c(x)
         return x
@@ -152,7 +176,7 @@ class ResBlock(nn.Module):
         )
         self.cond_proj = nn.Sequential(
             Swish(),
-            nn.Linear(tdim, out_ch),
+            nn.Linear(tdim // 2, out_ch),
         )
         self.block2 = nn.Sequential(
             nn.GroupNorm(32, out_ch),
@@ -173,11 +197,12 @@ class ResBlock(nn.Module):
     def forward(self, x, temb, labels):
         h = self.block1(x) # torch.Size([4, 64, 276, 128]) B, C, T, D
         h += self.temb_proj(temb)[:, :, None, None]
-        h += self.cond_proj(labels).transpose(1,2)[:, :, :, None]
+        h += self.cond_proj(labels).transpose(1,2).contiguous()[:, :, :, None]
+        # h += cemb
         h = self.block2(h)
 
         h = h + self.shortcut(x)
-        h = self.attn(h) # torch.Size([8, 128, 388, 128])
+        h = self.attn(h) # torch.Size([2, 64, 500, 128])
         return h
 
 class Transpose(nn.Module):
@@ -201,6 +226,8 @@ class UNet(nn.Module):
         self.cond_embedding = ConditionalEmbedding(num_labels, ch, tdim)
         self.head = nn.Conv2d(1, ch, kernel_size=3, stride=1, padding=1)
         self.downblocks = nn.ModuleList()
+        self.cemb_downblocks = nn.ModuleList()
+        self.cemb_upblocks = nn.ModuleList()
         chs = [ch]  # record output channel when dowmsample for upsample
         now_ch = ch
         for i, mult in enumerate(ch_mult):
@@ -211,6 +238,7 @@ class UNet(nn.Module):
                 chs.append(now_ch)
             if i != len(ch_mult) - 1:
                 self.downblocks.append(DownSample(now_ch))
+                self.cemb_downblocks.append(DownSample1d(1))
                 chs.append(now_ch)
 
         self.middleblocks = nn.ModuleList([
@@ -226,28 +254,29 @@ class UNet(nn.Module):
                 now_ch = out_ch
             if i != 0:
                 self.upblocks.append(UpSample(now_ch))
+                self.cemb_upblocks.append(UpSample1d(1))
         assert len(chs) == 0
 
         self.tail = nn.Sequential(
             nn.GroupNorm(32, now_ch),
             Swish(),
-            nn.Conv2d(now_ch, 3, 3, stride=1, padding=1)
+            nn.Conv2d(now_ch, 1, 3, stride=1, padding=1)
         )
 
         self.preconv_prosody = torch.nn.Sequential(
-            nn.Conv1d(1024, tdim, kernel_size=3, padding=1),
+            nn.Conv1d(1024, tdim // 2, kernel_size=3, padding=1),
             Transpose(1,2),
-            nn.LayerNorm(tdim),
+            nn.LayerNorm(tdim // 2),
             Mish())
         self.preconv_timbre = torch.nn.Sequential(
-            nn.Conv1d(512, tdim, kernel_size=3, padding=1),
+            nn.Conv1d(512, tdim // 2, kernel_size=3, padding=1),
             Transpose(1,2),
-            nn.LayerNorm(tdim),
+            nn.LayerNorm(tdim // 2),
             Mish())
         self.preconv_content = torch.nn.Sequential(
-            nn.Conv1d(1024, tdim, kernel_size=3, padding=1),
+            nn.Conv1d(1024, tdim // 2, kernel_size=3, padding=1),
             Transpose(1,2),
-            nn.LayerNorm(tdim),
+            nn.LayerNorm(tdim // 2),
             Mish())
  
 
@@ -256,26 +285,38 @@ class UNet(nn.Module):
         temb = self.time_embedding(t) # torch.Size([8, 512])
 
         # cond embedding # torch.Size([8, 380, 1024])
-        pro_emb = self.preconv_prosody(labels['pro'].permute(0, 2, 1))
-        tim_emb = self.preconv_timbre(labels['tim'].permute(0, 2, 1))
-        con_emb = self.preconv_content(labels['con'].permute(0,2,1))
-        cemb = (pro_emb + tim_emb + con_emb)
+        pro_emb = self.preconv_prosody(labels['pro'].permute(0, 2, 1).contiguous())
+        tim_emb = self.preconv_timbre(labels['tim'].permute(0, 2, 1).contiguous())
+        con_emb = self.preconv_content(labels['con'].permute(0,2,1).contiguous())
+        cemb = (pro_emb + tim_emb + con_emb) # torch.Size([2, 200, 256])
         # cemb = self.cond_embedding(labels)
         # Downsampling
         h = self.head(x.unsqueeze(1)) # torch.Size([8, 128, 400, 128])
         hs = [h]
+        
+        i = 0
         for layer in self.downblocks:
             h = layer(h, temb, cemb)
+            # print(h.shape)
+            if isinstance(layer, DownSample):
+                cemb = self.cemb_downblocks[i](cemb.unsqueeze(1), h, temb).squeeze(1)
+                i += 1
             hs.append(h)
+        # print([h.shape for h in hs])
         # Middle
         for layer in self.middleblocks:
             h = layer(h, temb, cemb)
         # Upsampling
+        i = 0
         for layer in self.upblocks:
             if isinstance(layer, ResBlock):
                 h = torch.cat([h, hs.pop()], dim=1)
             h = layer(h, temb, cemb)
-        h = self.tail(h)
+            # print(h.shape)
+            if isinstance(layer, UpSample):
+                cemb = self.cemb_upblocks[i](cemb, h, temb).squeeze(1)
+                i += 1
+        h = self.tail(h).squeeze(1).contiguous()
 
         assert len(hs) == 0
         return h

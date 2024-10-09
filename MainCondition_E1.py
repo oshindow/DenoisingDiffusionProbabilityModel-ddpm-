@@ -7,13 +7,13 @@ def main(model_config=None):
     modelConfig = {
         "state": "train", # or eval
         "epoch": 70,
-        "batch_size": 1,
+        "batch_size": 4,
         "T": 500,
         "channel": 64,
         "channel_mult": [1, 2, 2, 2],
         "num_res_blocks": 2,
         "dropout": 0.15,
-        "lr": 1e-4,
+        "lr": 1e-5,
         "multiplier": 2.5,
         "beta_1": 1e-4,
         "beta_T": 0.028,
@@ -40,9 +40,9 @@ def main(model_config=None):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '60001'
 
-    batch_size = modelConfig["batch_size"] // n_gpus
-    print('Total batch size:', modelConfig["batch_size"])
-    print('Batch size per GPU :', batch_size)
+    modelConfig["batch_size"] = modelConfig["batch_size"] // n_gpus
+    # print('Total batch size:', modelConfig["batch_size"])
+    print('Batch size per GPU :', modelConfig["batch_size"])
 
     mp.spawn(train, nprocs=n_gpus, args=(n_gpus, modelConfig))
     # if modelConfig["state"] == "train":

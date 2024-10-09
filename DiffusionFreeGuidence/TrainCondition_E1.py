@@ -38,7 +38,7 @@ import customAudioDataset as data
 #     print('Batch size per GPU :', batch_size)
 
 #     mp.spawn(run, nprocs=n_gpus, args=(n_gpus,))
-def fix_len_compatibility(length, num_downsamplings_in_unet=2):
+def fix_len_compatibility(length, num_downsamplings_in_unet=4):
     while True:
         if length % (2**num_downsamplings_in_unet) == 0:
             return length
@@ -125,7 +125,7 @@ def train(rank, n_gpus, modelConfig: Dict):
         print('Initializing data loaders...')
     device = torch.device(modelConfig["device"])
     # dataset
-    dataset = data.CustomAudioDataset('train_E3.txt', tensor_cut=500)
+    dataset = data.CustomAudioDataset('train_E3.txt', tensor_cut=200)
     train_sampler = DistributedBucketSampler(
         # logger,
         dataset,
@@ -145,7 +145,7 @@ def train(rank, n_gpus, modelConfig: Dict):
                      num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"]).to(device)
     
     net_model.cuda(rank)
-    print(net_model)
+    # print(net_model)
     net_model = DDP(net_model, device_ids=[rank],find_unused_parameters=True)
     if modelConfig["training_load_weight"] is not None:
         net_model.load_state_dict(torch.load(os.path.join(
@@ -207,7 +207,7 @@ def eval(modelConfig: Dict):
                 if k < 10 - 1:
                     k += 1
         labels = torch.cat(labelList, dim=0).long().to(device) + 1
-        print("labels: ", labels)
+        # print("labels: ", labels)
         model = UNet(T=modelConfig["T"], num_labels=10, ch=modelConfig["channel"], ch_mult=modelConfig["channel_mult"],
                      num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"]).to(device)
         ckpt = torch.load(os.path.join(
