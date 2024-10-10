@@ -12,8 +12,8 @@ from torchvision import transforms
 from torchvision.datasets import CIFAR10
 from torchvision.utils import save_image
 
-from DiffusionFreeGuidence.DiffusionCondition import GaussianDiffusionSampler, GaussianDiffusionTrainer
-from DiffusionFreeGuidence.ModelCondition_E1 import UNet
+from DiffusionFreeGuidence.DiffusionCondition_E2 import GaussianDiffusionSampler, GaussianDiffusionTrainer
+from DiffusionFreeGuidence.ModelCondition_E2 import UNet
 from Scheduler import GradualWarmupScheduler
 
 from torch.utils.data import DataLoader

@@ -282,7 +282,7 @@ class UNet(nn.Module):
 
     def forward(self, x, t, labels):
         # Timestep embedding
-        temb = self.time_embedding(t) # torch.Size([8, 512])
+        # temb = self.time_embedding(t) # torch.Size([8, 512])
 
         # cond embedding # torch.Size([8, 380, 1024])
         pro_emb = self.preconv_prosody(labels['pro'].permute(0, 2, 1).contiguous())
@@ -292,21 +292,22 @@ class UNet(nn.Module):
         # print(cemb)
         # print('cemb:', cemb.max(), cemb.min())
         # Downsampling
+        x = cemb
         h = self.head(x.unsqueeze(1)) # torch.Size([8, 128, 400, 128])
         hs = [h]
         
         i = 0
         for layer in self.downblocks:
-            h = layer(h, temb, cemb)
+            h = layer(h)
             # print(h.shape)
-            if isinstance(layer, DownSample):
-                cemb = self.cemb_downblocks[i](cemb.unsqueeze(1), h, temb).squeeze(1)
-                i += 1
+            # if isinstance(layer, DownSample):
+            #     cemb = self.cemb_downblocks[i](cemb.unsqueeze(1), h, temb).squeeze(1)
+            #     i += 1
             hs.append(h)
         # print([h.shape for h in hs])
         # Middle
         for layer in self.middleblocks:
-            h = layer(h, temb, cemb)
+            h = layer(h)
         # Upsampling
         i = 0
         for layer in self.upblocks:

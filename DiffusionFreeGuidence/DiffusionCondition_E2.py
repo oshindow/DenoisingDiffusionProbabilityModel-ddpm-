@@ -38,13 +38,14 @@ class GaussianDiffusionTrainer(nn.Module):
         """
         Algorithm 1.
         """
-        t = torch.randint(self.T, size=(x_0.shape[0], ), device=x_0.device)
-        noise = torch.randn_like(x_0)
-        x_t =   extract(self.sqrt_alphas_bar, t, x_0.shape) * x_0 + \
-                extract(self.sqrt_one_minus_alphas_bar, t, x_0.shape) * noise
-        # print(noise)
+        # t = torch.randint(self.T, size=(x_0.shape[0], ), device=x_0.device)
+        # noise = torch.randn_like(x_0)
+        # x_t =   extract(self.sqrt_alphas_bar, t, x_0.shape) * x_0 + \
+        #         extract(self.sqrt_one_minus_alphas_bar, t, x_0.shape) * noise
+        # # print(noise)
         # print('noise:', noise.max(), noise.min())
-        loss = F.mse_loss(self.model(x_t, t, labels), noise, reduction='none')
+        predict = self.model(labels)
+        loss = F.mse_loss(predict, x_0, reduction='none')
         # print('loss:', loss)
         return loss
 
