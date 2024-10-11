@@ -6,9 +6,9 @@ import torch
 from torch import nn
 from torch.nn import init
 from torch.nn import functional as F
-
+import quantization as qt
 from einops import rearrange
-
+import numpy as np
 def drop_connect(x, drop_ratio):
     keep_ratio = 1.0 - drop_ratio
     mask = torch.empty([x.shape[0], 1, 1, 1], dtype=x.dtype, device=x.device)
@@ -278,7 +278,19 @@ class UNet(nn.Module):
             Transpose(1,2),
             nn.LayerNorm(tdim // 2),
             Mish())
- 
+        
+        target_bandwidths = [1.5, 3., 6, 12., 24.]
+        sample_rate = 24_000
+        channels = 1
+        ratios = [8, 5, 4, 2]
+        ratios = list(reversed(ratios))
+        hop_length = np.prod(ratios)
+        n_q = int(1000 * target_bandwidths[-1] // (math.ceil(sample_rate / hop_length) * 10))  # = 32
+        self.quantizer = qt.ResidualVectorQuantizer(
+            dimension=128,
+            n_q=n_q,
+            bins=1024,
+        )
 
     def forward(self, x, t, labels):
         # Timestep embedding
@@ -322,7 +334,13 @@ class UNet(nn.Module):
         # print(h)
         # print('h:', h.max(), h.min())
         assert len(hs) == 0
-        return h
+
+
+        # quant
+        qv = self.quantizer.forward(h, 24000, None)
+        # loss_enc = loss_enc + qv.penalty + l2Loss(qv.quantized, emb) ** 2
+        # codes = qv.quantized
+        return qv.quantized
 
 
 if __name__ == '__main__':
