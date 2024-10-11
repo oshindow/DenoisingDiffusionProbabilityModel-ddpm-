@@ -338,9 +338,10 @@ class UNet(nn.Module):
 
         # quant
         qv = self.quantizer.forward(h, 24000, None)
-        # loss_enc = loss_enc + qv.penalty + l2Loss(qv.quantized, emb) ** 2
-        # codes = qv.quantized
-        return qv.quantized
+        
+        codes = self.quantizer.encode(h, 24000, None)
+
+        return qv.quantized, qv.penalty, codes
 
 
 if __name__ == '__main__':

@@ -44,13 +44,11 @@ class GaussianDiffusionTrainer(nn.Module):
         #         extract(self.sqrt_one_minus_alphas_bar, t, x_0.shape) * noise
         # # print(noise)
         # print('noise:', noise.max(), noise.min())
-        emb = self.model(labels)
+        quantized, penalty, codes = self.model(labels)
         # codes = []
-        qv = self.quantizer.forward(emb, self.sample_rate, self.bandwidth)
-        # loss_enc = loss_enc + qv.penalty + l2Loss(qv.quantized, emb) ** 2
-        codes = qv.quantized
+        
         # loss = qv.penalty
-        loss = F.mse_loss(emb, x_0, reduction='mean') + qv.penalty
+        loss = F.mse_loss(codes, x_0, reduction='mean') + penalty
         # print('loss:', loss)
         return loss
 
