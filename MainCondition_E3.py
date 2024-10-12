@@ -1,4 +1,4 @@
-from DiffusionFreeGuidence.TrainCondition_E1 import train, eval
+from DiffusionFreeGuidence.TrainCondition_E3 import train, eval
 import torch
 import os
 import torch.multiprocessing as mp

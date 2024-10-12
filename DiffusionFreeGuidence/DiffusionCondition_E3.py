@@ -34,23 +34,44 @@ class GaussianDiffusionTrainer(nn.Module):
         self.register_buffer(
             'sqrt_one_minus_alphas_bar', torch.sqrt(1. - alphas_bar))
 
-    def forward(self, x_0, labels):
+    def forward(self, x_0, labels, lengths):
         """
-        Algorithm 1.
+        Algorithm 1. x_0: torch.Size([1, 208, 8])
         """
-        # t = torch.randint(self.T, size=(x_0.shape[0], ), device=x_0.device)
-        # noise = torch.randn_like(x_0)
-        # x_t =   extract(self.sqrt_alphas_bar, t, x_0.shape) * x_0 + \
-        #         extract(self.sqrt_one_minus_alphas_bar, t, x_0.shape) * noise
-        # # print(noise)
-        # print('noise:', noise.max(), noise.min())
-        quantized, penalty, codes = self.model(labels)
-        # codes = []
         
-        # loss = qv.penalty
-        loss = F.mse_loss(codes, x_0, reduction='mean') + penalty
-        # print('loss:', loss)
-        return loss
+        quantized, penalty, codes, emb = self.model(labels)
+        # torch.Size([1, 128, 208]), torch.Size([1, 8, 208])
+        l2Loss = torch.nn.MSELoss(reduction='mean')
+        
+        
+        loss_enc = torch.tensor([0.0], device=codes.device, requires_grad=True)
+        
+        l2_loss = l2Loss(quantized, emb) ** 2
+        l1_loss = self.L1loss(codes, x_0, lengths)
+        # loss_enc = penalty + l2_loss + l1_loss
+
+        return penalty, l2_loss, l1_loss
+    
+    def L1loss(self, input, target, length):
+        l1loss = torch.nn.L1Loss(reduction='none')
+        batch_size, sequence_length, _  = input.shape
+        mask = torch.arange(sequence_length).expand(batch_size, sequence_length) < length.unsqueeze(1)
+
+        # print(input.shape, target.shape)
+        loss = l1loss(input, target)
+
+        # 把 mask 的形状扩展到 [batch_size, sequence_length, 1] 以匹配 loss 的维度
+        mask = mask.unsqueeze(-1).expand_as(loss).to(loss.device)
+
+        # 只保留有效位置的损失
+        masked_loss = loss * mask
+
+        # 计算有效位置的平均损失
+        loss_per_sample = masked_loss.sum(dim=(1, 2)) / mask.sum(dim=(1, 2))
+
+        # 最后对 batch 里的每个样本取平均损失
+        return loss_per_sample.mean()
+    # def inference()
 
 
 class GaussianDiffusionSampler(nn.Module):

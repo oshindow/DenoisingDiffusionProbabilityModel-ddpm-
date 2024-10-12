@@ -11,9 +11,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
 from torchvision.utils import save_image
-
-from DiffusionFreeGuidence.DiffusionCondition_E2 import GaussianDiffusionSampler, GaussianDiffusionTrainer
-from DiffusionFreeGuidence.ModelCondition_E2 import UNet
+import copy
+from DiffusionFreeGuidence.DiffusionCondition_E3 import GaussianDiffusionSampler, GaussianDiffusionTrainer
+from DiffusionFreeGuidence.ModelCondition_E3 import UNet
 from Scheduler import GradualWarmupScheduler
 
 from torch.utils.data import DataLoader
@@ -24,6 +24,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import customAudioDataset as data
+from encodec import EncodecModel
 # from DiffusionFreeGuidence.TrainCondition_E1 import train, eval
 # def main(params):
 #     """Assume Single Node Multi GPUs Training Only"""
@@ -74,7 +75,7 @@ def collate_fn(batch):
         #     target = target[:, start:start+self.tensor_cut,:]
         #     # print(target.size())
         #     self.lengths[idx] = self.tensor_cut
-
+        
         lengths.append(pro_.shape[-2])
         # tar_lengths.append(tar_.shape[-2])
 
@@ -101,7 +102,34 @@ def collate_fn(batch):
     # pro, tim, con, tar, lengths
     return pro, tim, con, tar, lengths
 
-# def run(rank, n_gpus):
+def remove_encodec_weight_norm(model):
+    from encodec.modules import SConv1d
+    from encodec.modules.seanet import SConvTranspose1d, SEANetResnetBlock
+    from torch.nn.utils import remove_weight_norm
+
+    encoder = model.encoder.model
+    for key in encoder._modules:
+        if isinstance(encoder._modules[key], SEANetResnetBlock):
+            remove_weight_norm(encoder._modules[key].shortcut.conv.conv)
+            block_modules = encoder._modules[key].block._modules
+            for skey in block_modules:
+                if isinstance(block_modules[skey], SConv1d):
+                    remove_weight_norm(block_modules[skey].conv.conv)
+        elif isinstance(encoder._modules[key], SConv1d):
+            remove_weight_norm(encoder._modules[key].conv.conv)
+
+    decoder = model.decoder.model
+    for key in decoder._modules:
+        if isinstance(decoder._modules[key], SEANetResnetBlock):
+            remove_weight_norm(decoder._modules[key].shortcut.conv.conv)
+            block_modules = decoder._modules[key].block._modules
+            for skey in block_modules:
+                if isinstance(block_modules[skey], SConv1d):
+                    remove_weight_norm(block_modules[skey].conv.conv)
+        elif isinstance(decoder._modules[key], SConvTranspose1d):
+            remove_weight_norm(decoder._modules[key].convtr.convtr)
+        elif isinstance(decoder._modules[key], SConv1d):
+            remove_weight_norm(decoder._modules[key].conv.conv)
     
 
 def train(rank, n_gpus, modelConfig: Dict):
@@ -144,9 +172,20 @@ def train(rank, n_gpus, modelConfig: Dict):
     net_model = UNet(T=modelConfig["T"], num_labels=10, ch=modelConfig["channel"], ch_mult=modelConfig["channel_mult"],
                      num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"]).to(device)
     
+    # net_model.cuda(rank)
+
+    # load quantizer
+    pretrained_encodec = EncodecModel.encodec_model_24khz()
+    pretrained_encodec.set_target_bandwidth(6.0)
+    remove_encodec_weight_norm(pretrained_encodec)
+    
+    net_model.quantizer = copy.deepcopy(pretrained_encodec.quantizer)
+    for param in net_model.quantizer.parameters():
+        param.requires_grad = True
+
     net_model.cuda(rank)
-    # print(net_model)
     net_model = DDP(net_model, device_ids=[rank],find_unused_parameters=True)
+    
     if modelConfig["training_load_weight"] is not None:
         net_model.load_state_dict(torch.load(os.path.join(
             modelConfig["save_dir"], modelConfig["training_load_weight"]), map_location=device), strict=False)
@@ -179,17 +218,23 @@ def train(rank, n_gpus, modelConfig: Dict):
                 # if np.random.rand() < 0.1:
                 #     labels = torch.zeros_like(labels).to(device)
                 # loss = trainer(x_0, labels).sum() / b ** 2. # labels - emb
-                loss = trainer(x_0, labels).sum() / images.shape[1]
+                penalty, l2_loss, l1_loss = trainer(x_0, labels, lengths)
+                loss = penalty + l2_loss + l1_loss
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
                     net_model.parameters(), modelConfig["grad_clip"])
                 optimizer.step()
                 tqdmDataLoader.set_postfix(ordered_dict={
                     "epoch": e,
+                    "penalty: ": penalty.item(),
+                    "l2_loss: ": l2_loss.item(),
+                    "l1_loss: ": l1_loss.item(),
                     "loss: ": loss.item(),
                     "img shape: ": x_0.shape,
-                    "LR": optimizer.state_dict()['param_groups'][0]["lr"]
+                    "LR": optimizer.state_dict()['param_groups'][0]["lr"],
+                    
                 })
+                # print(
         warmUpScheduler.step()
         torch.save(net_model.state_dict(), os.path.join(
             modelConfig["save_dir"], 'ckpt_' + str(e) + "_.pt"))

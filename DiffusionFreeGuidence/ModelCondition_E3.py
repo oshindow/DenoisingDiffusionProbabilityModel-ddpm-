@@ -194,10 +194,10 @@ class ResBlock(nn.Module):
             self.attn = nn.Identity()
 
 
-    def forward(self, x, temb, labels):
+    def forward(self, x):
         h = self.block1(x) # torch.Size([4, 64, 276, 128]) B, C, T, D
-        h += self.temb_proj(temb)[:, :, None, None]
-        h += self.cond_proj(labels).transpose(1,2).contiguous()[:, :, :, None]
+        # h += self.temb_proj(temb)[:, :, None, None]
+        # h += self.cond_proj(labels).transpose(1,2).contiguous()[:, :, :, None]
         # h += cemb
         h = self.block2(h)
 
@@ -292,7 +292,7 @@ class UNet(nn.Module):
             bins=1024,
         )
 
-    def forward(self, x, t, labels):
+    def forward(self, labels):
         # Timestep embedding
         # temb = self.time_embedding(t) # torch.Size([8, 512])
 
@@ -330,18 +330,18 @@ class UNet(nn.Module):
             # if isinstance(layer, UpSample):
             #     cemb = self.cemb_upblocks[i](cemb, h, temb).squeeze(1)
             #     i += 1
-        h = self.tail(h).squeeze(1).contiguous()
+        h = self.tail(h).squeeze(1).transpose(1,2).contiguous()
         # print(h)
         # print('h:', h.max(), h.min())
         assert len(hs) == 0
 
 
-        # quant
-        qv = self.quantizer.forward(h, 24000, None)
-        
-        codes = self.quantizer.encode(h, 24000, None)
-
-        return qv.quantized, qv.penalty, codes
+        # quant h torch.Size([1, 128, 137])
+        qv = self.quantizer.forward(h, 75, 6.0)
+        # wav (padding) [1,2,3,-1,-1,0,0] -> [110,110, ] -> [1,2,3,0,0,0,0]
+        # codes = self.quantizer.encode(h, 75, 6.0)
+        # codes = codes.transpose(0, 1)
+        return qv.quantized, qv.penalty, qv.codes.permute(1,2,0), h
 
 
 if __name__ == '__main__':

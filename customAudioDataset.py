@@ -108,7 +108,7 @@ class CustomAudioDataset(torch.utils.data.Dataset):
         prosody = prosody_scaled.unsqueeze(0)
         timbre = torch.FloatTensor(np.load(timbre_path))
         target = torch.FloatTensor(np.load(target_path)).transpose(1, 2)[:,:prosody.shape[-2],:]
-        target = self.norm(target, dim=-1)[1]
+        # target = self.norm(target, dim=-1)[1]
         # print(target, target_scaled)
         # print(target.max(), target.min())
         # print(target_scaled.max(), target_scaled.min())
